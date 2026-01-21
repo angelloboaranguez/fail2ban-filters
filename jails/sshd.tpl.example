@@ -1,0 +1,11 @@
+# Copy this file without the .example extension and adjust the values to your needs.
+
+[sshd]
+enabled  = true
+port     = ssh
+filter   = sshd[mode=aggressive]
+backend  = systemd
+maxretry = 3
+findtime = 10m
+bantime  = 30d
+action   = nftables[type=multiport, name=sshd, port="ssh", table=f2b-table, family=inet, chain=input]

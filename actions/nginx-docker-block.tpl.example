@@ -1,0 +1,11 @@
+# Copy this file without the .example extension and adjust the values to your needs.
+
+[Definition]
+actionban = echo "deny <ip>;" >> $NGINX_BLACKLIST_FILE
+            touch $NGINX_RELOAD_TRIGGER_FILE
+
+actionunban = sed -i "/deny <ip>;/d" $NGINX_BLACKLIST_FILE
+              touch $NGINX_RELOAD_TRIGGER_FILE
+
+[Init]
+# No need for variables here because envsubst already added them into the final file

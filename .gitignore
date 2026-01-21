@@ -1,0 +1,6 @@
+logs
+.env
+*.conf
+*.nft
+*_old
+*.tpl

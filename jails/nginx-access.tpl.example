@@ -1,0 +1,10 @@
+# Copy this file without the .example extension and adjust the values to your needs.
+
+[nginx-access]
+enabled  = true
+filter   = nginx-access
+logpath  = ${NGINX_ACCESS_LOG}
+maxretry = 10
+findtime = 1m
+bantime  = 30d
+action   = nginx-docker-block

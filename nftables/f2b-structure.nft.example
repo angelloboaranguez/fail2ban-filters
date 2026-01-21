@@ -1,0 +1,11 @@
+#!/usr/sbin/nft -f
+
+# Copy this file without the .example extension and adjust the values to your needs.
+
+add table inet f2b-table
+
+table inet f2b-table {
+    chain input {
+        type filter hook input priority filter - 10; policy accept;
+    }
+}

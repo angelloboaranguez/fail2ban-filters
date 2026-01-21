@@ -1,0 +1,5 @@
+# Copy this file without the .example extension and adjust the values to your needs.
+
+[Definition]
+failregex = ^\s*<HOST> -.* "(?:[A-Z]+) \S+ HTTP/\d+\.\d+" (4\d{2}|5\d{2}) .*
+ignoreregex = \.(?:js|css|png|jpg|jpeg|gif|ogg|mp3|mp4|webm|webp|ico|svg|woff|woff2|map|json|txt|pdf|xml)(?:\s+|$)
