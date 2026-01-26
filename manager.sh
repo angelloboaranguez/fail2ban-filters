@@ -168,25 +168,51 @@ elif [[ "$opt" == "r" || "$opt" == "R" ]]; then
 elif [[ "$opt" == "s" || "$opt" == "S" ]]; then
     read -p "Enter IP or list of IPs (separated by commas): " input_ips
     [[ -z "$input_ips" ]] && echo "Cancelled." && exit
-
     IFS=',' read -ra ADDR <<< "$input_ips"
-    
+
     for ip in "${ADDR[@]}"; do
         ip=$(echo "$ip" | xargs)
         [[ -z "$ip" ]] && continue
+        echo -e "\n${CYAN}🔎 Searching for IP:${NC} ${YELLOW}$ip${NC}"
+        echo -e "${CYAN}--------------------------------------------------${NC}"
 
-        echo -e "\n${CYAN}Searching for IP:${NC} $ip ..."
-        found=false
+        found_any=false
 
         for jail in "${active_jails[@]}"; do
-            if sudo fail2ban-client status "$jail" | grep "Banned IP list:" | grep -qE "\b$ip\b"; then
-                echo -e "${GREEN}[✔] FOUND:${NC} IP $ip is banned in: ${YELLOW}$jail${NC}"
-                found=true
+            is_banned=$(sudo fail2ban-client status "$jail" | grep "Banned IP list:" | grep -qE "\b$ip\b" && echo -e "${RED}[BANNED]${NC}" || echo -e "${GREEN}[CLEAN]${NC}")
+            raw_output=$(sudo fail2ban-client get "$jail" logpath | sed -r "s/\x1B\[([0-9]{1,3}(;[0-9]{1,2})?)?[mGK]//g")
+
+            echo -e "Jail: ${CYAN}$(printf '%-15s' "$jail")${NC} State: $is_banned"
+
+            logs=""
+
+            if [[ "$raw_output" == *"No file(s) found"* ]]; then
+                logs=$(sudo journalctl -u "$jail" --since "48 hours ago" --no-pager | grep "$ip")
+            else
+                log_file=$(echo "$raw_output" | sed 's/Current monitored log file(s)://g' | tr -d '`|' | sed 's/^-//g' | xargs -n1 2>/dev/null | head -n1)
+                if [ -n "$log_file" ] && [ -f "$log_file" ]; then
+                    logs=$(sudo grep "$ip" "$log_file" 2>/dev/null)
+                fi
+            fi
+
+            if [ -n "$logs" ]; then
+                count=$(echo "$logs" | wc -l)
+                echo -e "   └─ Matches: ${YELLOW}$count${NC} times"
+
+                echo "$logs" | grep -oP '\s[1-5][0-9]{2}\s' | sed 's/ //g' | sort | uniq -c | sort -nr | while read -r line; do
+                    occ=$(echo $line | awk '{print $1}')
+                    code=$(echo $line | awk '{print $2}')
+                    echo -e "      ${GREEN}→${NC} Code ${CYAN}$code${NC}: $occ"
+                done
+
+                found_any=true
+            else
+                echo -e "   └─ No recent logs found."
             fi
         done
 
-        if [ "$found" = false ]; then
-            echo -e "${RED}[✘] NOT FOUND:${NC} IP $ip is not banned in any jail."
+        if [ "$found_any" = false ]; then
+            echo -e "${RED}⚠️  No traces of the IP found in active jails.${NC}"
         fi
     done
 

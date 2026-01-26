@@ -105,11 +105,14 @@ echo "🔄 Restarting Fail2ban..."
 sudo systemctl restart fail2ban
 
 echo "🛡️  Verifying Nginx configuration..."
-if docker exec "$NGINX_CONTAINER_NAME" nginx -t > /dev/null 2>&1; then
-    docker exec "$NGINX_CONTAINER_NAME" nginx -s reload
-    echo "✅ Configuration applied and Nginx reloaded."
+NGINX_TEST_OUTPUT=$(docker exec "$NGINX_CONTAINER_NAME" nginx -t 2>&1)
+
+if echo "$NGINX_TEST_OUTPUT" | grep -q 'test is successful'; then
+    docker exec "$NGINX_CONTAINER_NAME" nginx -s reload > /dev/null 2>&1
+    echo "✅ Nginx reloaded."
 else
-    echo "❌ Error in Nginx syntax. Check the .conf files."
+    echo "❌ Nginx reload aborted. Error in configuration:"
+    echo "$NGINX_TEST_OUTPUT"
     exit 1
 fi
 
@@ -120,10 +123,10 @@ RELOAD_MANAGER_PATH="$SCRIPT_DIR/nginx_cron_reloader.sh"
 chmod +x "$RELOAD_MANAGER_PATH"
 
 CRON_LINE="* * * * * $RELOAD_MANAGER_PATH >> $SCRIPT_DIR/logs/nginx_cron_reloader.log 2>&1"
-if crontab -l 2>/dev/null | grep -Fq "$RELOAD_MANAGER_PATH"; then
+if sudo crontab -l 2>/dev/null | grep -Fq "$RELOAD_MANAGER_PATH"; then
     echo "✅ Reload Manager is already configured in the cron."
 else
-    (crontab -l 2>/dev/null; echo "$CRON_LINE") | crontab -
+    (sudo crontab -l 2>/dev/null; echo "$CRON_LINE") | sudo crontab -
     echo "🕐 Reload Manager added to cron: executing every minute."
 fi
 
