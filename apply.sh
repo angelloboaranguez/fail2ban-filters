@@ -84,12 +84,12 @@ CLOUDFLARE_V6=$(curl -s https://www.cloudflare.com/ips-v6)
   echo "set_real_ip_from 192.168.0.0/16;"
   echo "set_real_ip_from 10.0.0.0/8;"
   for ip in $CLOUDFLARE_V4 $CLOUDFLARE_V6; do echo "set_real_ip_from $ip;"; done
-} > "$NGINX_CLOUDFLARE_FILE"
+} | sudo tee "$NGINX_CLOUDFLARE_FILE" > /dev/null
 
 if [ ! -f "$NGINX_BLACKLIST_FILE" ]; then
-    echo "# Nginx Blacklist" > "$NGINX_BLACKLIST_FILE"
+    echo "# Nginx Blacklist" | sudo tee "$NGINX_BLACKLIST_FILE" > /dev/null
 fi
-chmod 664 "$NGINX_BLACKLIST_FILE"
+sudo chmod 664 "$NGINX_BLACKLIST_FILE"
 echo "⚙️  Configuring Fail2ban..."
 
 envsubst < ./actions/nginx-docker-block.tpl | sudo tee "$FAIL2BAN_DIR/action.d/nginx-docker-block.conf" > /dev/null

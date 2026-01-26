@@ -13,10 +13,14 @@ fi
 
 echo "$(date): 🔄 Changes detected. Validating Nginx..."
 
-if docker exec "$NGINX_CONTAINER_NAME" nginx -t > /dev/null 2>&1; then
-    docker exec "$NGINX_CONTAINER_NAME" nginx -s reload
+NGINX_TEST_OUTPUT=$(docker exec "$NGINX_CONTAINER_NAME" nginx -t 2>&1)
+
+if echo "$NGINX_TEST_OUTPUT" | grep -q 'test is successful'; then
+    docker exec "$NGINX_CONTAINER_NAME" nginx -s reload > /dev/null 2>&1
     sudo rm "$NGINX_RELOAD_TRIGGER_FILE"
     echo "$(date): ✅ Nginx reloaded."
 else
-    echo "$(date): ❌ Error in configuration. Reload aborted."
+    echo "$(date): ❌ Nginx reload aborted. Error in configuration:"
+    echo "$NGINX_TEST_OUTPUT"
+    exit 1
 fi
