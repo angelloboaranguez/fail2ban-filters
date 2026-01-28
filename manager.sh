@@ -29,8 +29,9 @@ menu_options() {
     echo -e "${GREEN}C)${NC} Count banned IPs for all Jails"
     echo -e "${GREEN}D)${NC} Detailed list of banned IPs for all Jails"
     echo -e "${GREEN}N)${NC} NFTables bans list"
-    echo -e "${GREEN}R)${NC} Regex tester for Fail2ban filters"
+    echo -e "${GREEN}R)${NC} Restart Fail2ban"
     echo -e "${GREEN}S)${NC} Search IP in banned lists"
+    echo -e "${GREEN}T)${NC} Test Fail2ban filters"
     echo -e "${GREEN}E)${NC} Exit"
 }
 
@@ -119,51 +120,9 @@ elif [[ "$opt" == "n" || "$opt" == "N" ]]; then
     fi
 
 elif [[ "$opt" == "r" || "$opt" == "R" ]]; then
-    ENV_FILE="./.env"
-    [ -f "$ENV_FILE" ] && export $(grep -v '^#' "$ENV_FILE" | xargs -d '\n' | tr -d '\r')
-
-    echo -e "${CYAN}=== Dynamic Regex Tester ===${NC}"
-
-    filters=($(ls filters/*.conf 2>/dev/null | xargs -n 1 basename | sed 's/.conf//'))
-
-    if [ ${#filters[@]} -eq 0 ]; then
-        echo "❌ No filters found in filters/ folder"
-        exit 1
-    fi
-
-    echo -e "${YELLOW}Select a filter to test:${NC}"
-    for i in "${!filters[@]}"; do
-        echo -e "${GREEN}$((i+1)))${NC} ${filters[$i]}"
-    done
-    echo -e "${GREEN}$(( ${#filters[@]} + 1 )))${NC} Exit"
-
-    echo -e "${GREEN}"
-    read -p "Select option: " opt
-    echo -e "${NC}"
-
-    if [[ "$opt" -gt 0 && "$opt" -le "${#filters[@]}" ]]; then
-        filter_name=${filters[$((opt-1))]}
-        
-        var_name=$(echo "${filter_name}_LOG" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
-        log_path="${!var_name}"
-
-        if [ -z "$log_path" ]; then
-            echo -e "${RED}❌ Error: No variable $var_name found in .env${NC}"
-            exit 1
-        fi
-
-        echo -e "\n${YELLOW}Testing:${NC} $filter_name | ${YELLOW}Log:${NC} $log_path"
-        echo -e "1) Summary\n2) Matched\n3) Missed"
-        read -p "Detail: " detail
-        
-        case $detail in
-            1) sudo fail2ban-regex "$log_path" "./filters/${filter_name}.conf" ;;
-            2) sudo fail2ban-regex --print-all-matched "$log_path" "./filters/${filter_name}.conf" ;;
-            3) sudo fail2ban-regex --print-all-missed "$log_path" "./filters/${filter_name}.conf" ;;
-        esac
-    else
-        exit 0
-    fi
+    echo -e "${GREEN}🔄 Restarting Fail2ban...${NC}"
+    sudo systemctl restart fail2ban
+    echo -e "${GREEN}✅ Fail2ban restarted.${NC}"
 
 elif [[ "$opt" == "s" || "$opt" == "S" ]]; then
     read -p "Enter IP or list of IPs (separated by commas): " input_ips
@@ -215,6 +174,53 @@ elif [[ "$opt" == "s" || "$opt" == "S" ]]; then
             echo -e "${RED}⚠️  No traces of the IP found in active jails.${NC}"
         fi
     done
+
+elif [[ "$opt" == "t" || "$opt" == "T" ]]; then
+    ENV_FILE="./.env"
+    [ -f "$ENV_FILE" ] && export $(grep -v '^#' "$ENV_FILE" | xargs -d '\n' | tr -d '\r')
+
+    echo -e "${CYAN}=== Dynamic Regex Tester ===${NC}"
+
+    filters=($(ls filters/*.conf 2>/dev/null | xargs -n 1 basename | sed 's/.conf//'))
+
+    if [ ${#filters[@]} -eq 0 ]; then
+        echo "❌ No filters found in filters/ folder"
+        exit 1
+    fi
+
+    echo -e "${YELLOW}Select a filter to test:${NC}"
+    for i in "${!filters[@]}"; do
+        echo -e "${GREEN}$((i+1)))${NC} ${filters[$i]}"
+    done
+    echo -e "${GREEN}$(( ${#filters[@]} + 1 )))${NC} Exit"
+
+    echo -e "${GREEN}"
+    read -p "Select option: " opt
+    echo -e "${NC}"
+
+    if [[ "$opt" -gt 0 && "$opt" -le "${#filters[@]}" ]]; then
+        filter_name=${filters[$((opt-1))]}
+
+        var_name=$(echo "${filter_name}_LOG" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
+        log_path="${!var_name}"
+
+        if [ -z "$log_path" ]; then
+            echo -e "${RED}❌ Error: No variable $var_name found in .env${NC}"
+            exit 1
+        fi
+
+        echo -e "\n${YELLOW}Testing:${NC} $filter_name | ${YELLOW}Log:${NC} $log_path"
+        echo -e "1) Summary\n2) Matched\n3) Missed"
+        read -p "Detail: " detail
+
+        case $detail in
+            1) sudo fail2ban-regex "$log_path" "./filters/${filter_name}.conf" ;;
+            2) sudo fail2ban-regex --print-all-matched "$log_path" "./filters/${filter_name}.conf" ;;
+            3) sudo fail2ban-regex --print-all-missed "$log_path" "./filters/${filter_name}.conf" ;;
+        esac
+    else
+        exit 0
+    fi
 
 else
     echo -e "${CYAN}Exiting...${NC}"
