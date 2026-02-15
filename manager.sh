@@ -1,4 +1,7 @@
 #!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
@@ -28,11 +31,13 @@ menu_options() {
     echo -e "${GREEN}U)${NC} Unban IP manually"
     echo -e "${GREEN}C)${NC} Count banned IPs for all Jails"
     echo -e "${GREEN}D)${NC} Detailed list of banned IPs for all Jails"
+    echo -e "${GREEN}E)${NC} Export banned IPs to .txt files"
+    echo -e "${GREEN}I)${NC} Import banned IPs from .txt files"
     echo -e "${GREEN}N)${NC} NFTables bans list"
     echo -e "${GREEN}R)${NC} Restart Fail2ban"
     echo -e "${GREEN}S)${NC} Search IP in banned lists"
     echo -e "${GREEN}T)${NC} Test Fail2ban filters"
-    echo -e "${GREEN}E)${NC} Exit"
+    echo -e "${GREEN}X)${NC} Exit"
 }
 
 menu_options
@@ -221,6 +226,67 @@ elif [[ "$opt" == "t" || "$opt" == "T" ]]; then
     else
         exit 0
     fi
+
+elif [[ "$opt" == "e" || "$opt" == "E" ]]; then
+    EXPORT_DIR="$SCRIPT_DIR/exports"
+    mkdir -p "$EXPORT_DIR"
+    echo -e "${YELLOW}Exporting IPs to: $EXPORT_DIR${NC}"
+
+    for jail in "${active_jails[@]}"; do
+        banned_ips=$(sudo fail2ban-client status "$jail" | grep "Banned IP list:" | sed 's/.*Banned IP list://' | tr -d ',')
+
+        if [ -z "$(echo $banned_ips | xargs)" ]; then
+            echo -e "Jail ${CYAN}$jail${NC}: No IPs to export."
+        else
+            EXPORT_DATE=$(date +%Y%m%d_%H%M%S)
+            echo "$banned_ips" | xargs -n1 > "$EXPORT_DIR/${jail}_banned_$EXPORT_DATE.txt"
+            count=$(wc -l < "$EXPORT_DIR/${jail}_banned_$EXPORT_DATE.txt")
+            echo -e "Jail ${CYAN}$jail${NC}: ${GREEN}$count IPs${NC} exported to ${jail}_banned_$EXPORT_DATE.txt"
+        fi
+    done
+    echo -e "\n${GREEN}✅ Export completed.${NC}"
+
+elif [[ "$opt" == "i" || "$opt" == "I" ]]; then
+    EXPORT_DIR="$SCRIPT_DIR/exports"
+
+    files=($(ls "$EXPORT_DIR"/*.txt 2>/dev/null))
+    if [ ${#files[@]} -eq 0 ]; then
+        echo -e "${RED}❌ No .txt files found in $EXPORT_DIR${NC}"
+        exit 1
+    fi
+
+    echo -e "${YELLOW}Select file to import:${NC}"
+    for i in "${!files[@]}"; do
+        echo -e "${GREEN}$((i+1)))${NC} $(basename "${files[$i]}")"
+    done
+    read -p "Option: " file_opt
+    selected_file="${files[$((file_opt-1))]}"
+
+    if [ ! -f "$selected_file" ]; then echo "Invalid selection"; exit 1; fi
+
+    echo -e "\n${YELLOW}Select destination Jail:${NC}"
+    for i in "${!active_jails[@]}"; do
+        echo -e "${GREEN}$((i+1)))${NC} ${active_jails[$i]}"
+    done
+    read -p "Option: " jail_opt
+    target_jail="${active_jails[$((jail_opt-1))]}"
+
+    if [ -z "$target_jail" ]; then echo "Invalid jail"; exit 1; fi
+
+    echo -e "${CYAN}Importing IPs from $(basename "$selected_file") into [$target_jail]...${NC}"
+
+    count=0
+    while IFS= read -r ip; do
+        ip=$(echo "$ip" | xargs)
+        if [[ -n "$ip" ]]; then
+            sudo fail2ban-client set "$target_jail" banip "$ip" > /dev/null 2>&1
+            ((count++))
+            echo -ne "Progress: $count IPs processed...\r"
+        fi
+    done < "$selected_file"
+
+    echo -e "\n${GREEN}✅ Success: $count IPs processed in [$target_jail].${NC}"
+    echo -e "${YELLOW}Note: IPs already banned were skipped.${NC}"
 
 else
     echo -e "${CYAN}Exiting...${NC}"
