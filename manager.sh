@@ -70,16 +70,44 @@ if [[ "$opt" =~ ^[0-9]+$ ]] && [ "$opt" -le "${#active_jails[@]}" ]; then
 elif [[ "$opt" == "b" || "$opt" == "B" ]]; then
     read -p "IP to ban: " ip
     [[ -z "$ip" ]] && echo "Cancelled." && exit
-    echo -e "${YELLOW}Available jails:${NC} ${active_jails[@]}"
-    read -p "Jail Name: " jail
+    echo -e "${YELLOW}Select Jail:${NC}"
+    for i in "${!active_jails[@]}"; do
+        echo -e "${GREEN}$((i+1)))${NC} ${active_jails[$i]}"
+    done
+    read -p "Option: " jail_opt
+    if [[ ! "$jail_opt" =~ ^[0-9]+$ ]] || [ "$jail_opt" -lt 1 ] || [ "$jail_opt" -gt "${#active_jails[@]}" ]; then
+        echo -e "${RED}❌ Invalid selection.${NC}"
+        exit 1
+    fi
+    jail="${active_jails[$((jail_opt-1))]}"
     sudo fail2ban-client set "$jail" banip "$ip" && echo -e "${GREEN}✅ IP $ip banned.${NC}"
+    if [[ "$jail" == *"nginx"* ]]; then
+        read -p "Nginx jail detected. Execute ./nginx_cron_reloader.sh to apply changes? (Y/n): " reload
+        if [[ "$reload" != "n" && "$reload" != "N" ]]; then
+            sudo "$SCRIPT_DIR/nginx_cron_reloader.sh"
+        fi
+    fi
 
 elif [[ "$opt" == "u" || "$opt" == "U" ]]; then
     read -p "IP to unban: " ip
     [[ -z "$ip" ]] && echo "Cancelled." && exit
-    echo -e "${YELLOW}Available jails:${NC} ${active_jails[@]}"
-    read -p "Jail Name: " jail
+    echo -e "${YELLOW}Select Jail:${NC}"
+    for i in "${!active_jails[@]}"; do
+        echo -e "${GREEN}$((i+1)))${NC} ${active_jails[$i]}"
+    done
+    read -p "Option: " jail_opt
+    if [[ ! "$jail_opt" =~ ^[0-9]+$ ]] || [ "$jail_opt" -lt 1 ] || [ "$jail_opt" -gt "${#active_jails[@]}" ]; then
+        echo -e "${RED}❌ Invalid selection.${NC}"
+        exit 1
+    fi
+    jail="${active_jails[$((jail_opt-1))]}"
     sudo fail2ban-client set "$jail" unbanip "$ip" && echo -e "${GREEN}✅ IP $ip unbanned.${NC}"
+    if [[ "$jail" == *"nginx"* ]]; then
+        read -p "Nginx jail detected. Execute ./nginx_cron_reloader.sh to apply changes? (Y/n): " reload
+        if [[ "$reload" != "n" && "$reload" != "N" ]]; then
+            sudo "$SCRIPT_DIR/nginx_cron_reloader.sh"
+        fi
+    fi
 
 elif [[ "$opt" == "c" || "$opt" == "C" ]]; then
     for jail in "${active_jails[@]}"; do
