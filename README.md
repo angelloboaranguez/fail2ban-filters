@@ -40,9 +40,12 @@ NGINX_ACCESS_LOG=path/to/nginx-proxy/access.log
 NGINX_ERROR_LOG=path/to/nginx-proxy/error.log
 NGINX_CONTAINER_NAME=nginx-proxy
 NGINX_BLACKLIST_FILE=path/to/nginx-proxy/config/blacklist.conf
+NGINX_WHITELIST_FILE=path/to/nginx-proxy/config/whitelist.conf
 NGINX_CLOUDFLARE_FILE=path/to/nginx-proxy/config/cloudflare_realip.conf
 NGINX_RELOAD_TRIGGER_FILE=/tmp/nginx_reload_pending
 ```
+
+`NGINX_WHITELIST_FILE` should be included before the blacklist in your Nginx config if you load both files explicitly. The manager also removes any matching `deny` entry when an IP is whitelisted, so the whitelist keeps priority over the blacklist.
 
 ### 2. 🚀 Deployment
 
@@ -75,6 +78,12 @@ Or use manager.sh script for convenience and interactive options:
 ./manager.sh
 ```
 
+The manager includes:
+* Manual ban / unban per jail.
+* Manual whitelist / whitelist removal per jail.
+* Persistent Fail2ban whitelist storage in `/etc/fail2ban/jail.d/99-manager-whitelist.local`.
+* Nginx sync so whitelisted IPs are written as `allow x.x.x.x;` and removed from the blacklist file.
+
 ## 📂 Smart Mapping of Logs and Filters
 
 The system uses an automatic naming convention to link Fail2ban filters with their corresponding log files defined in the environment. This allows analysis and testing scripts to be **completely dynamic**.
@@ -95,7 +104,7 @@ If you want to add protection for a **Redis** service:
 | :--- | :--- |
 | `apply.sh` | Deploys filters and generates final Jails from `.tpl`. |
 | `manager.sh` | **Fail2ban Filters** Live Manager. |
-| `nginx_cron_reloader.sh` | Reloads Nginx configuration when bans are added or removed. Add it to root user cron with desired ban delay.<br>(Add `NGINX_BLACKLIST_FILE` and `NGINX_RELOAD_TRIGGER_FILE` as volumes to nginx service if using Docker). |
+| `nginx_cron_reloader.sh` | Reloads Nginx configuration when bans or whitelist changes are added or removed. Add it to root user cron with desired ban delay.<br>(Add `NGINX_BLACKLIST_FILE`, `NGINX_WHITELIST_FILE` and `NGINX_RELOAD_TRIGGER_FILE` as volumes to nginx service if using Docker). |
 
 
 ### 📌 Notes

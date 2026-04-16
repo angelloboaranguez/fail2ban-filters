@@ -2,7 +2,10 @@
 set -e
 
 if [ -f "./.env" ]; then
-  export $(grep -v '^#' .env | xargs)
+  set -a
+  # shellcheck disable=SC1091
+  source "./.env"
+  set +a
   echo "✅ Environment variables loaded."
 else
   echo "❌ Error: .env not found."
@@ -72,7 +75,7 @@ enabled = false
 " | sudo tee "$FAIL2BAN_DIR/jail.d/00-global-overrides.local" > /dev/null
 
 echo "☁️  Downloading Cloudflare ranges..."
-mkdir -p "$(dirname "$NGINX_CLOUDFLARE_FILE")"
+mkdir -p "$(dirname "$NGINX_CLOUDFLARE_FILE")" "$(dirname "$NGINX_BLACKLIST_FILE")" "$(dirname "$NGINX_WHITELIST_FILE")"
 CLOUDFLARE_V4=$(curl -s https://www.cloudflare.com/ips-v4)
 CLOUDFLARE_V6=$(curl -s https://www.cloudflare.com/ips-v6)
 
@@ -89,7 +92,10 @@ CLOUDFLARE_V6=$(curl -s https://www.cloudflare.com/ips-v6)
 if [ ! -f "$NGINX_BLACKLIST_FILE" ]; then
     echo "# Nginx Blacklist" | sudo tee "$NGINX_BLACKLIST_FILE" > /dev/null
 fi
-sudo chmod 664 "$NGINX_BLACKLIST_FILE"
+if [ ! -f "$NGINX_WHITELIST_FILE" ]; then
+    echo "# Nginx Whitelist" | sudo tee "$NGINX_WHITELIST_FILE" > /dev/null
+fi
+sudo chmod 664 "$NGINX_BLACKLIST_FILE" "$NGINX_WHITELIST_FILE"
 echo "⚙️  Configuring Fail2ban..."
 
 envsubst < ./actions/nginx-docker-block.tpl | sudo tee "$FAIL2BAN_DIR/action.d/nginx-docker-block.conf" > /dev/null

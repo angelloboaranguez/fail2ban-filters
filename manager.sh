@@ -10,6 +10,26 @@ RED='\033[0;31m'
 BLUE='\033[0;34m'
 GOLD='\033[0;33m'
 NC='\033[0m'
+MANAGED_WHITELIST_FILE="/etc/fail2ban/jail.d/99-manager-whitelist.local"
+ENV_LOADED=0
+
+load_env_file() {
+    if [ "$ENV_LOADED" -eq 1 ]; then
+        return 0
+    fi
+
+    local env_file="$SCRIPT_DIR/.env"
+    if [ ! -f "$env_file" ]; then
+        echo -e "${RED}❌ Error: .env not found in $SCRIPT_DIR.${NC}"
+        return 1
+    fi
+
+    set -a
+    # shellcheck disable=SC1090
+    source "$env_file"
+    set +a
+    ENV_LOADED=1
+}
 
 get_banned_ips() {
     local jail="$1"
@@ -24,6 +44,190 @@ is_ip_banned_in_jail() {
     local ip="$2"
 
     sudo fail2ban-client status "$jail" 2>/dev/null | grep -Fq -- "$ip"
+}
+
+get_jail_ignoreips() {
+    local jail="$1"
+
+    sudo fail2ban-client get "$jail" ignoreip 2>/dev/null \
+        | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?|([[:xdigit:]]{0,4}:){2,}[[:xdigit:]]{0,4}(/[0-9]{1,3})?' \
+        || true
+}
+
+is_ip_whitelisted_in_jail() {
+    local jail="$1"
+    local ip="$2"
+
+    get_jail_ignoreips "$jail" | grep -Fxq -- "$ip"
+}
+
+is_nginx_jail() {
+    local jail="$1"
+    [[ "$jail" == *"nginx"* ]]
+}
+
+select_jail_interactively() {
+    local jail_opt
+
+    echo -e "${YELLOW}Select Jail:${NC}" >&2
+    for i in "${!active_jails[@]}"; do
+        echo -e "${GREEN}$((i+1)))${NC} ${active_jails[$i]}" >&2
+    done
+    read -p "Option: " jail_opt >&2
+
+    if [[ ! "$jail_opt" =~ ^[0-9]+$ ]] || [ "$jail_opt" -lt 1 ] || [ "$jail_opt" -gt "${#active_jails[@]}" ]; then
+        echo -e "${RED}❌ Invalid selection.${NC}" >&2
+        return 1
+    fi
+
+    printf '%s\n' "${active_jails[$((jail_opt-1))]}"
+}
+
+save_jail_ignoreips_config() {
+    local jail="$1"
+    shift
+    local tmp_file
+
+    tmp_file=$(mktemp)
+
+    if sudo test -f "$MANAGED_WHITELIST_FILE"; then
+        sudo cat "$MANAGED_WHITELIST_FILE" | awk -v jail="$jail" '
+            /^[[:space:]]*\[/ {
+                section = $0
+                gsub(/^[[:space:]]*\[|\][[:space:]]*$/, "", section)
+                if (section == jail) {
+                    skip = 1
+                    next
+                }
+                skip = 0
+            }
+            !skip { print }
+        ' > "$tmp_file"
+    fi
+
+    if [ "$#" -gt 0 ]; then
+        if [ -s "$tmp_file" ]; then
+            printf '\n' >> "$tmp_file"
+        fi
+        printf '[%s]\n' "$jail" >> "$tmp_file"
+        printf 'ignoreip = %s\n' "$*" >> "$tmp_file"
+    fi
+
+    sudo mkdir -p "$(dirname "$MANAGED_WHITELIST_FILE")"
+    sudo install -m 0644 "$tmp_file" "$MANAGED_WHITELIST_FILE"
+    rm -f "$tmp_file"
+}
+
+persist_current_ignoreips() {
+    local jail="$1"
+    local ignoreips=()
+
+    mapfile -t ignoreips < <(get_jail_ignoreips "$jail" | awk 'NF && !seen[$0]++')
+    save_jail_ignoreips_config "$jail" "${ignoreips[@]}"
+}
+
+ensure_nginx_control_files() {
+    load_env_file || return 1
+
+    if [ -z "${NGINX_BLACKLIST_FILE:-}" ] || [ -z "${NGINX_WHITELIST_FILE:-}" ] || [ -z "${NGINX_RELOAD_TRIGGER_FILE:-}" ]; then
+        echo -e "${RED}❌ Missing Nginx whitelist variables in .env.${NC}"
+        echo -e "${YELLOW}Required:${NC} NGINX_BLACKLIST_FILE, NGINX_WHITELIST_FILE, NGINX_RELOAD_TRIGGER_FILE"
+        return 1
+    fi
+
+    sudo mkdir -p "$(dirname "$NGINX_BLACKLIST_FILE")" "$(dirname "$NGINX_WHITELIST_FILE")"
+    sudo touch "$NGINX_BLACKLIST_FILE" "$NGINX_WHITELIST_FILE"
+    sudo chmod 664 "$NGINX_BLACKLIST_FILE" "$NGINX_WHITELIST_FILE"
+}
+
+append_unique_line_to_file() {
+    local file_path="$1"
+    local line="$2"
+
+    if ! sudo grep -Fxq -- "$line" "$file_path" 2>/dev/null; then
+        printf '%s\n' "$line" | sudo tee -a "$file_path" > /dev/null
+    fi
+}
+
+remove_exact_line_from_file() {
+    local file_path="$1"
+    local line="$2"
+    local tmp_file
+
+    tmp_file=$(mktemp)
+    sudo grep -Fxv -- "$line" "$file_path" > "$tmp_file" || true
+    sudo install -m 0664 "$tmp_file" "$file_path"
+    rm -f "$tmp_file"
+}
+
+apply_nginx_whitelist_add() {
+    local ip="$1"
+
+    ensure_nginx_control_files || return 1
+    append_unique_line_to_file "$NGINX_WHITELIST_FILE" "allow $ip;"
+    remove_exact_line_from_file "$NGINX_BLACKLIST_FILE" "deny $ip;"
+    sudo touch "$NGINX_RELOAD_TRIGGER_FILE"
+}
+
+apply_nginx_whitelist_remove() {
+    local ip="$1"
+
+    ensure_nginx_control_files || return 1
+    remove_exact_line_from_file "$NGINX_WHITELIST_FILE" "allow $ip;"
+    sudo touch "$NGINX_RELOAD_TRIGGER_FILE"
+}
+
+prompt_nginx_reload() {
+    local jail="$1"
+    local reload
+
+    if ! is_nginx_jail "$jail"; then
+        return 0
+    fi
+
+    read -p "Nginx jail detected. Execute ./nginx_cron_reloader.sh to apply changes? (Y/n): " reload
+    if [[ "$reload" != "n" && "$reload" != "N" ]]; then
+        sudo "$SCRIPT_DIR/nginx_cron_reloader.sh"
+    fi
+}
+
+whitelist_ip_in_jail() {
+    local jail="$1"
+    local ip="$2"
+
+    if is_ip_whitelisted_in_jail "$jail" "$ip"; then
+        echo -e "${YELLOW}ℹ️  IP $ip is already whitelisted in [$jail].${NC}"
+    else
+        sudo fail2ban-client set "$jail" addignoreip "$ip"
+        echo -e "${GREEN}✅ IP $ip added to Fail2ban whitelist in [$jail].${NC}"
+    fi
+
+    sudo fail2ban-client set "$jail" unbanip "$ip" > /dev/null 2>&1 || true
+    persist_current_ignoreips "$jail"
+
+    if is_nginx_jail "$jail"; then
+        apply_nginx_whitelist_add "$ip"
+        echo -e "${GREEN}✅ IP $ip added to Nginx whitelist and removed from blacklist.${NC}"
+    fi
+}
+
+remove_whitelist_ip_from_jail() {
+    local jail="$1"
+    local ip="$2"
+
+    if is_ip_whitelisted_in_jail "$jail" "$ip"; then
+        sudo fail2ban-client set "$jail" delignoreip "$ip"
+        echo -e "${GREEN}✅ IP $ip removed from Fail2ban whitelist in [$jail].${NC}"
+    else
+        echo -e "${YELLOW}ℹ️  IP $ip was not in the Fail2ban whitelist for [$jail].${NC}"
+    fi
+
+    persist_current_ignoreips "$jail"
+
+    if is_nginx_jail "$jail"; then
+        apply_nginx_whitelist_remove "$ip"
+        echo -e "${GREEN}✅ IP $ip removed from Nginx whitelist.${NC}"
+    fi
 }
 
 import_ips_from_file() {
@@ -152,6 +356,8 @@ menu_options() {
     echo -e "\n${YELLOW}--- Manual Actions ---${NC}"
     echo -e "${GREEN}B)${NC} Ban IP manually"
     echo -e "${GREEN}U)${NC} Unban IP manually"
+    echo -e "${GREEN}W)${NC} Whitelist IP manually"
+    echo -e "${GREEN}L)${NC} Remove IP from whitelist"
     echo -e "${GREEN}C)${NC} Count banned IPs for all Jails"
     echo -e "${GREEN}D)${NC} Detailed list of banned IPs for all Jails"
     echo -e "${GREEN}E)${NC} Export banned IPs to .txt files"
@@ -194,44 +400,30 @@ if [[ "$opt" =~ ^[0-9]+$ ]] && [ "$opt" -le "${#active_jails[@]}" ]; then
 elif [[ "$opt" == "b" || "$opt" == "B" ]]; then
     read -p "IP to ban: " ip
     [[ -z "$ip" ]] && echo "Cancelled." && exit
-    echo -e "${YELLOW}Select Jail:${NC}"
-    for i in "${!active_jails[@]}"; do
-        echo -e "${GREEN}$((i+1)))${NC} ${active_jails[$i]}"
-    done
-    read -p "Option: " jail_opt
-    if [[ ! "$jail_opt" =~ ^[0-9]+$ ]] || [ "$jail_opt" -lt 1 ] || [ "$jail_opt" -gt "${#active_jails[@]}" ]; then
-        echo -e "${RED}❌ Invalid selection.${NC}"
-        exit 1
-    fi
-    jail="${active_jails[$((jail_opt-1))]}"
+    jail=$(select_jail_interactively) || exit 1
     sudo fail2ban-client set "$jail" banip "$ip" && echo -e "${GREEN}✅ IP $ip banned.${NC}"
-    if [[ "$jail" == *"nginx"* ]]; then
-        read -p "Nginx jail detected. Execute ./nginx_cron_reloader.sh to apply changes? (Y/n): " reload
-        if [[ "$reload" != "n" && "$reload" != "N" ]]; then
-            sudo "$SCRIPT_DIR/nginx_cron_reloader.sh"
-        fi
-    fi
+    prompt_nginx_reload "$jail"
 
 elif [[ "$opt" == "u" || "$opt" == "U" ]]; then
     read -p "IP to unban: " ip
     [[ -z "$ip" ]] && echo "Cancelled." && exit
-    echo -e "${YELLOW}Select Jail:${NC}"
-    for i in "${!active_jails[@]}"; do
-        echo -e "${GREEN}$((i+1)))${NC} ${active_jails[$i]}"
-    done
-    read -p "Option: " jail_opt
-    if [[ ! "$jail_opt" =~ ^[0-9]+$ ]] || [ "$jail_opt" -lt 1 ] || [ "$jail_opt" -gt "${#active_jails[@]}" ]; then
-        echo -e "${RED}❌ Invalid selection.${NC}"
-        exit 1
-    fi
-    jail="${active_jails[$((jail_opt-1))]}"
+    jail=$(select_jail_interactively) || exit 1
     sudo fail2ban-client set "$jail" unbanip "$ip" && echo -e "${GREEN}✅ IP $ip unbanned.${NC}"
-    if [[ "$jail" == *"nginx"* ]]; then
-        read -p "Nginx jail detected. Execute ./nginx_cron_reloader.sh to apply changes? (Y/n): " reload
-        if [[ "$reload" != "n" && "$reload" != "N" ]]; then
-            sudo "$SCRIPT_DIR/nginx_cron_reloader.sh"
-        fi
-    fi
+    prompt_nginx_reload "$jail"
+
+elif [[ "$opt" == "w" || "$opt" == "W" ]]; then
+    read -p "IP to whitelist: " ip
+    [[ -z "$ip" ]] && echo "Cancelled." && exit
+    jail=$(select_jail_interactively) || exit 1
+    whitelist_ip_in_jail "$jail" "$ip"
+    prompt_nginx_reload "$jail"
+
+elif [[ "$opt" == "l" || "$opt" == "L" ]]; then
+    read -p "IP to remove from whitelist: " ip
+    [[ -z "$ip" ]] && echo "Cancelled." && exit
+    jail=$(select_jail_interactively) || exit 1
+    remove_whitelist_ip_from_jail "$jail" "$ip"
+    prompt_nginx_reload "$jail"
 
 elif [[ "$opt" == "c" || "$opt" == "C" ]]; then
     for jail in "${active_jails[@]}"; do
@@ -295,8 +487,14 @@ elif [[ "$opt" == "s" || "$opt" == "S" ]]; then
         found_any=false
 
         for jail in "${active_jails[@]}"; do
-            if is_ip_banned_in_jail "$jail" "$ip"; then
+            if is_ip_banned_in_jail "$jail" "$ip" && is_ip_whitelisted_in_jail "$jail" "$ip"; then
+                is_banned=$(echo -e "${YELLOW}[BANNED + WHITELISTED]${NC}")
+                found_any=true
+            elif is_ip_banned_in_jail "$jail" "$ip"; then
                 is_banned=$(echo -e "${RED}[BANNED]${NC}")
+                found_any=true
+            elif is_ip_whitelisted_in_jail "$jail" "$ip"; then
+                is_banned=$(echo -e "${BLUE}[WHITELISTED]${NC}")
                 found_any=true
             else
                 is_banned=$(echo -e "${GREEN}[CLEAN]${NC}")
